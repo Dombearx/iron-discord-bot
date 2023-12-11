@@ -128,7 +128,8 @@ async def on_message(message):
         )
 
         async with message.channel.typing():
-            response = await chatbot.achat(complete_message)
+            response = "Hello from AWS!"
+            # response = await chatbot.achat(complete_message)
             await message.channel.send(response)
 
 
