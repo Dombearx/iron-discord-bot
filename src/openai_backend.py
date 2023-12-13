@@ -31,7 +31,7 @@ class ChatBotTemplate:
                         "Be friendly and helpful."
                     ),
                 ),
-                ("user", "{human_input}"),
+                ("user", "{human_message}"),
                 MessagesPlaceholder(variable_name="agent_scratchpad"),
             ]
         )
@@ -43,7 +43,7 @@ class ChatBotTemplate:
 
         self.agent = (
             {
-                "human_input": lambda x: x["human_input"],
+                "human_message": lambda x: x["human_message"],
                 "agent_scratchpad": lambda x: format_function(x["intermediate_steps"]),
             }
             | prompt
@@ -51,15 +51,15 @@ class ChatBotTemplate:
             | OpenAIFunctionsAgentOutputParser()
         )
 
-    def chat(self, human_input: str):
+    def chat(self, human_message: str):
         agent_executor = AgentExecutor(agent=self.agent, tools=self.tools, verbose=True)
-        output = agent_executor.invoke({"human_input": human_input})
+        output = agent_executor.invoke({"human_message": human_message})
 
         return output["output"]
 
-    async def achat(self, human_input: str):
+    async def achat(self, human_message: str):
         agent_executor = AgentExecutor(agent=self.agent, tools=self.tools, verbose=True)
-        output = await agent_executor.ainvoke({"human_input": human_input})
+        output = await agent_executor.ainvoke({"human_message": human_message})
 
         return output["output"]
 

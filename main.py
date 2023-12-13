@@ -1,4 +1,6 @@
 import os
+from enum import Enum
+
 import discord
 from langchain.agents.format_scratchpad import format_to_openai_functions
 from langchain.chat_models import ChatOpenAI
@@ -24,6 +26,7 @@ from langchain.callbacks.manager import (
 )
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
+import pytz
 
 
 class GetDataFromChannelSchema(BaseModel):
@@ -74,10 +77,11 @@ class GetDataFromChannelTool(BaseTool):
 
         channel_history = ""
         for old_message in messages:
+            created_at = old_message.created_at.astimezone(pytz.timezone("Europe/Warsaw"))
             channel_history += (
                 old_message.author.name
                 + " at "
-                + str(old_message.created_at)
+                + created_at.strftime('%Y-%m-%d %H:%M')
                 + " said: "
             )
             channel_history += old_message.content
@@ -102,6 +106,43 @@ class OpenAIChatBot(ChatBotTemplate):
 async def on_ready():
     print(f"We have logged in as {client.user}")
 
+class Trigger(Enum):
+    MENTION = 1
+    RESPONSE = 2
+    THREAD = 3
+def should_respond(message) -> Optional[Trigger]:
+    if message.reference:
+        if message.reference.cached_message:
+            if message.reference.cached_message.author == client.user:
+                return Trigger.RESPONSE
+    if client.user in message.mentions:
+        return Trigger.MENTION
+    if message.channel.type == discord.ChannelType.public_thread:
+        return Trigger.THREAD
+    return None
+
+async def get_channel_history(channel):
+    history_range = 1
+
+    if channel.type == discord.ChannelType.public_thread:
+        history_range = 0
+
+    day_ago = datetime.datetime.now() - datetime.timedelta(days=history_range)
+    if not history_range:
+        day_ago = None
+
+    channel_history = ""
+    async for old_message in channel.history(after=day_ago):
+        created_at = old_message.created_at.astimezone(pytz.timezone("Europe/Warsaw"))
+        channel_history += (
+            old_message.author.name
+            + " at "
+            + created_at.strftime('%Y-%m-%d %H:%M')
+            + " said: "
+        )
+        channel_history += old_message.content
+        channel_history += "\n"
+    return channel_history
 
 @client.event
 async def on_message(message):
@@ -110,9 +151,10 @@ async def on_message(message):
 
     channels = {}
     users = {}
-    if client.user in message.mentions:
-        human_order = message.content.replace(f"<@{client.user.id}> ", "")
-        logger.debug(f"Processing: {human_order}")
+    trigger = should_respond(message)
+    if trigger:
+        human_message = message.content
+        logger.debug(f"Processing: {human_message}")
 
         if message.channel_mentions:
             for channel in message.channel_mentions:
@@ -121,15 +163,21 @@ async def on_message(message):
             if user != client.user:
                 users[user.display_name] = user.id
 
+        channel_history = await get_channel_history(message.channel)
+
         complete_message = (
-            # f"Channels: {channels}\n"
-            # f"Users: {users}\n"
-            f"{message.author.display_name}: {human_order}"
+            f"Your id is {client.user.id}\n"
+            f"Mentioned channels: {channels}\n"
+            f"Mentioned users: {users}\n"
+            f"{channel_history}"
         )
+        if trigger == Trigger.THREAD:
+            complete_message = complete_message.rstrip()
+            complete_message += f" {message.content}"
 
         async with message.channel.typing():
-            response = "Hello from AWS!"
-            # response = await chatbot.achat(complete_message)
+            # response = "Hello from AWS!"
+            response = await chatbot.achat(complete_message)
             await message.channel.send(response)
 
 
