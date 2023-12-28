@@ -28,9 +28,14 @@ class ChatBotTemplate:
                     (
                         "Your name is Klyde, you are a bot on discord server. "
                         "Your goal is to help server users. "
-                        "Be friendly and helpful."
+                        "Be friendly and helpful. "
+                        "Response ONLY with your message to the rest of users. "
+                        "Your responses MUST be SHORT and SIMPLE. "
+                        "If you don't know what to say, don't want to respond or shouldn't respond, "
+                        "respond with single word: END."
                     ),
                 ),
+                MessagesPlaceholder(variable_name="chat_history"),
                 ("user", "{human_message}"),
                 MessagesPlaceholder(variable_name="agent_scratchpad"),
             ]
@@ -45,6 +50,7 @@ class ChatBotTemplate:
             {
                 "human_message": lambda x: x["human_message"],
                 "agent_scratchpad": lambda x: format_function(x["intermediate_steps"]),
+                "chat_history": lambda x: x["chat_history"],
             }
             | prompt
             | main_llm
@@ -57,9 +63,9 @@ class ChatBotTemplate:
 
         return output["output"]
 
-    async def achat(self, human_message: str):
+    async def achat(self, human_message: str, chat_history: list[str]):
         agent_executor = AgentExecutor(agent=self.agent, tools=self.tools, verbose=True)
-        output = await agent_executor.ainvoke({"human_message": human_message})
+        output = await agent_executor.ainvoke({"human_message": human_message, "chat_history": chat_history})
 
         return output["output"]
 

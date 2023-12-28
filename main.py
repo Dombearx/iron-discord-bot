@@ -9,12 +9,7 @@ from loguru import logger
 from dotenv import load_dotenv
 
 from src.openai_backend import ChatBotTemplate
-
-intents = discord.Intents.default()
-intents.message_content = True
-
-client = discord.Client(intents=intents)
-
+from src.tools import GetDataFromChannelTool
 import datetime
 
 
@@ -28,65 +23,10 @@ from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 import pytz
 
+intents = discord.Intents.default()
+intents.message_content = True
 
-class GetDataFromChannelSchema(BaseModel):
-    channel_id: int = Field(description="should be a channel id")
-    n_days: Optional[int] = Field(
-        description="should be a number of last days to get messages from. Use only if you don't know how many messages you want to get"
-    )
-    n_messages: Optional[int] = Field(
-        description="should be a number of messages to get or None if n_days is not None"
-    )
-
-
-class GetDataFromChannelTool(BaseTool):
-    name: str = "get_data_from_channel"
-    description: str = (
-        "Allows to get messages from given channel. Either from last n_days or last n_messages."
-        "Will never return more than 100 messages. "
-        "Tool is async only."
-    )
-    args_schema: Type[GetDataFromChannelSchema] = GetDataFromChannelSchema
-
-    def _run(
-        self,
-        channel_id: int,
-        n_days: Optional[int] = None,
-        n_messages: Optional[int] = None,
-        run_manager: Optional[CallbackManagerForToolRun] = None,
-    ) -> bool:
-        """Use the tool."""
-        raise NotImplementedError("get_data_from_channel does not support sync")
-
-    async def _arun(
-        self,
-        channel_id: int,
-        n_days: Optional[int] = None,
-        n_messages: Optional[int] = None,
-        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
-    ) -> str:
-        """Use the tool asynchronously."""
-        channel = client.get_channel(channel_id)
-        messages = []
-        if n_days:
-            day_ago = datetime.datetime.now() - datetime.timedelta(days=n_days)
-            messages = [message async for message in channel.history(after=day_ago)]
-        if n_messages:
-            messages = [message async for message in channel.history(limit=n_messages)]
-        messages = messages[:100]
-
-        channel_history = ""
-        for old_message in messages:
-            created_at = old_message.created_at.astimezone(pytz.timezone("Europe/Warsaw"))
-            channel_history += (
-                old_message.author.name
-                + " at "
-                + created_at.strftime('%Y-%m-%d %H:%M')
-                + " said: "
-            )
-            channel_history += old_message.content
-            channel_history += "\n"
-        return channel_history
+client = discord.Client(intents=intents)
 
 
 class OpenAIChatBot(ChatBotTemplate):
@@ -95,7 +35,7 @@ class OpenAIChatBot(ChatBotTemplate):
         super().__init__(
             main_llm,
             tools=[
-                GetDataFromChannelTool(),
+                GetDataFromChannelTool(client=client),
             ],
             format_function=format_to_openai_functions,
             tool_format_function=format_tool_to_openai_function,
@@ -110,6 +50,7 @@ class Trigger(Enum):
     MENTION = 1
     RESPONSE = 2
     THREAD = 3
+    DM_MESSAGE = 4
 def should_respond(message) -> Optional[Trigger]:
     if message.reference:
         if message.reference.cached_message:
@@ -119,30 +60,9 @@ def should_respond(message) -> Optional[Trigger]:
         return Trigger.MENTION
     if message.channel.type == discord.ChannelType.public_thread:
         return Trigger.THREAD
+    if message.channel.type == discord.ChannelType.private:
+        return Trigger.DM_MESSAGE
     return None
-
-async def get_channel_history(channel):
-    history_range = 1
-
-    if channel.type == discord.ChannelType.public_thread:
-        history_range = 0
-
-    day_ago = datetime.datetime.now() - datetime.timedelta(days=history_range)
-    if not history_range:
-        day_ago = None
-
-    channel_history = ""
-    async for old_message in channel.history(after=day_ago):
-        created_at = old_message.created_at.astimezone(pytz.timezone("Europe/Warsaw"))
-        channel_history += (
-            old_message.author.name
-            + " at "
-            + created_at.strftime('%Y-%m-%d %H:%M')
-            + " said: "
-        )
-        channel_history += old_message.content
-        channel_history += "\n"
-    return channel_history
 
 @client.event
 async def on_message(message):
@@ -163,7 +83,7 @@ async def on_message(message):
             if user != client.user:
                 users[user.display_name] = user.id
 
-        channel_history = await get_channel_history(message.channel)
+        channel_history = await GetDataFromChannelTool.get_channel_history(message.channel, n_days=1)
 
         complete_message = (
             f"Your id is {client.user.id}\n"
@@ -171,13 +91,14 @@ async def on_message(message):
             f"Mentioned users: {users}\n"
             f"{channel_history}"
         )
-        if trigger == Trigger.THREAD:
+        if trigger != Trigger.THREAD:
             complete_message = complete_message.rstrip()
-            complete_message += f" {message.content}"
+            complete_message = "\n".join(complete_message.split("\n")[:-1])
 
         async with message.channel.typing():
-            # response = "Hello from AWS!"
-            response = await chatbot.achat(complete_message)
+            response = await chatbot.achat(human_message, chat_history=complete_message.split("\n"))
+            if response.strip().endswith("END") or response.strip().endswith("END."):
+                return
             await message.channel.send(response)
 
 
